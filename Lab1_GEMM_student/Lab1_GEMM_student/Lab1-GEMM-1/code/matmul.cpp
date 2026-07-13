@@ -7,6 +7,7 @@
 #include <cstdlib>
 #include <string>
 #include <vector>
+#include <immintrin.h>
 
 double get_time() {
   struct timeval tv;
@@ -147,6 +148,19 @@ void gemm_ikj_unrolled4(const Matrix &A, const Matrix &B, Matrix &C, const GemmP
   }
 }
 
+void gemm_write_cached(const Matrix &A, const Matrix &B, Matrix &C, const GemmProblem &p) {
+  zero(C);
+  for (int i = 0; i < p.I; ++i) {
+    for (int j = 0; j < p.J; ++j) {
+      int sum = 0;
+      for (int k = 0; k < p.K; ++k) {
+        sum += A[idx(i, k, p.K)] * B[idx(k, j, p.J)];
+      }
+      C[idx(i, j, p.J)] = sum;
+    }
+  }
+}
+
 void gemm_packed_B(const Matrix &A, const Matrix &B, Matrix &C, const GemmProblem &p) {
   Matrix packedB(p.K * p.J);
   zero(C);
@@ -161,6 +175,77 @@ void gemm_packed_B(const Matrix &A, const Matrix &B, Matrix &C, const GemmProble
       const int *bp = &packedB[idx(k, 0, p.J)];
       for (int j = 0; j < p.J; ++j) {
         C[idx(i, j, p.J)] += a * bp[j];
+      }
+    }
+  }
+}
+
+void gemm_simd4(const Matrix &A, const Matrix &B, Matrix &C, const GemmProblem &p) {
+  zero(C);
+  const int j4 = p.J & ~3;
+  for (int i = 0; i < p.I; ++i) {
+    for (int j = 0; j < j4; j += 4) {
+      int s0 = 0, s1 = 0, s2 = 0, s3 = 0;
+      #pragma GCC ivdep
+      for (int k = 0; k < p.K; ++k) {
+        const int a = A[idx(i, k, p.K)];
+        s0 += a * B[idx(k, j + 0, p.J)];
+        s1 += a * B[idx(k, j + 1, p.J)];
+        s2 += a * B[idx(k, j + 2, p.J)];
+        s3 += a * B[idx(k, j + 3, p.J)];
+      }
+      C[idx(i, j + 0, p.J)] = s0;
+      C[idx(i, j + 1, p.J)] = s1;
+      C[idx(i, j + 2, p.J)] = s2;
+      C[idx(i, j + 3, p.J)] = s3;
+    }
+    for (int j = j4; j < p.J; ++j) {
+      int sum = 0;
+      for (int k = 0; k < p.K; ++k) {
+        sum += A[idx(i, k, p.K)] * B[idx(k, j, p.J)];
+      }
+      C[idx(i, j, p.J)] = sum;
+    }
+  }
+}
+
+void gemm_hybrid_fast(const Matrix &A, const Matrix &B, Matrix &C, const GemmProblem &p) {
+  using v4i = int __attribute__((vector_size(16)));
+  zero(C);
+  constexpr int tile = 32;
+  for (int ii = 0; ii < p.I; ii += tile) {
+    const int i_end = std::min(ii + tile, p.I);
+    for (int kk = 0; kk < p.K; kk += tile) {
+      const int k_end = std::min(kk + tile, p.K);
+      for (int jj = 0; jj < p.J; jj += tile) {
+        const int j_end = std::min(jj + tile, p.J);
+        const int k_blk = k_end - kk;
+        const int j_blk = j_end - jj;
+        Matrix Bblk(k_blk * j_blk);
+        for (int k = 0; k < k_blk; ++k) {
+          for (int j = 0; j < j_blk; ++j) {
+            Bblk[k * j_blk + j] = B[idx(kk + k, jj + j, p.J)];
+          }
+        }
+        const int j4 = j_blk & ~3;
+        for (int i = ii; i < i_end; ++i) {
+          int *cptr = &C[idx(i, jj, p.J)];
+          for (int k = 0; k < k_blk; ++k) {
+            const int a = A[idx(i, kk + k, p.K)];
+            const int *bptr = &Bblk[k * j_blk];
+            v4i avec = {a, a, a, a};
+            int j = 0;
+            for (; j < j4; j += 4) {
+              v4i cvec = *reinterpret_cast<v4i *>(cptr + j);
+              v4i bvec = *reinterpret_cast<const v4i *>(bptr + j);
+              cvec += avec * bvec;
+              *reinterpret_cast<v4i *>(cptr + j) = cvec;
+            }
+            for (; j < j_blk; ++j) {
+              cptr[j] += a * bptr[j];
+            }
+          }
+        }
       }
     }
   }
@@ -284,9 +369,12 @@ void run_q1(int I, int J, int K, const std::string &algo, int repeat) {
       {"matmul_ikj", gemm_ikj},
       {"matmul_AT", transpose_A_then_gemm},
       {"matmul_BT", transpose_B_then_gemm},
-      {"tiled_32", [](const Matrix &a, const Matrix &b, Matrix &c, const GemmProblem &p) { gemm_ikj_tiled(a, b, c, p, 32); }},
-      {"unrolled_4", gemm_ikj_unrolled4},
-      {"packed_B", gemm_packed_B},
+      {"writing_caching", gemm_write_cached},
+      {"tiling", [](const Matrix &a, const Matrix &b, Matrix &c, const GemmProblem &p) { gemm_ikj_tiled(a, b, c, p, 32); }},
+      {"loop_unrolling", gemm_ikj_unrolled4},
+      {"array_packing", gemm_packed_B},
+      {"vectorization", gemm_simd4},
+      {"hybrid_fast", gemm_hybrid_fast},
   };
 
   for (const auto &c : cases) {
@@ -342,10 +430,12 @@ void run_q3() {
     const char *name;
     GemmFn fn;
   } cases[] = {
-      {"baseline_ikj", gemm_ikj},
-      {"tiled_32", [](const Matrix &a, const Matrix &b, Matrix &c, const GemmProblem &p) { gemm_ikj_tiled(a, b, c, p, 32); }},
-      {"unrolled_4", gemm_ikj_unrolled4},
-      {"packed_B", gemm_packed_B},
+      {"loop_unrolling", gemm_ikj_unrolled4},
+      {"writing_caching", gemm_write_cached},
+      {"tiling", [](const Matrix &a, const Matrix &b, Matrix &c, const GemmProblem &p) { gemm_ikj_tiled(a, b, c, p, 32); }},
+      {"vectorization", gemm_simd4},
+      {"hybrid_fast", gemm_hybrid_fast},
+      {"array_packing", gemm_packed_B},
   };
 
   for (const auto &c : cases) {
@@ -380,3 +470,8 @@ int main(int argc, char **argv) {
   }
   return 0;
 }
+
+
+
+
+
