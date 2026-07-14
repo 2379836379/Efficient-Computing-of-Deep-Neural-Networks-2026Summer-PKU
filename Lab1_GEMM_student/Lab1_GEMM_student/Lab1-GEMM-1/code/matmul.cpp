@@ -181,23 +181,19 @@ void gemm_packed_B(const Matrix &A, const Matrix &B, Matrix &C, const GemmProble
 }
 
 void gemm_simd4(const Matrix &A, const Matrix &B, Matrix &C, const GemmProblem &p) {
+  using v4i = int __attribute__((vector_size(16)));
   zero(C);
   const int j4 = p.J & ~3;
   for (int i = 0; i < p.I; ++i) {
     for (int j = 0; j < j4; j += 4) {
-      int s0 = 0, s1 = 0, s2 = 0, s3 = 0;
-      #pragma GCC ivdep
+      v4i sum = {0, 0, 0, 0};
       for (int k = 0; k < p.K; ++k) {
         const int a = A[idx(i, k, p.K)];
-        s0 += a * B[idx(k, j + 0, p.J)];
-        s1 += a * B[idx(k, j + 1, p.J)];
-        s2 += a * B[idx(k, j + 2, p.J)];
-        s3 += a * B[idx(k, j + 3, p.J)];
+        const v4i avec = {a, a, a, a};
+        const v4i bvec = *reinterpret_cast<const v4i *>(&B[idx(k, j, p.J)]);
+        sum += avec * bvec;
       }
-      C[idx(i, j + 0, p.J)] = s0;
-      C[idx(i, j + 1, p.J)] = s1;
-      C[idx(i, j + 2, p.J)] = s2;
-      C[idx(i, j + 3, p.J)] = s3;
+      *reinterpret_cast<v4i *>(&C[idx(i, j, p.J)]) = sum;
     }
     for (int j = j4; j < p.J; ++j) {
       int sum = 0;

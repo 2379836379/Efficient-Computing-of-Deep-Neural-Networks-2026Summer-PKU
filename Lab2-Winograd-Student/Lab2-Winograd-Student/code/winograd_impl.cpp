@@ -64,8 +64,26 @@ const float AT[2][4] = {
 //        U: 4x4 output (row-major, stride = 4)
 // ============================================================
 void kernel_transform(const float* g, float* U) {
-    // TODO: implement G * g * G^T
-    // Hint: compute tmp = G * g (4x3 * 3x3 = 4x3), then U = tmp * G^T (4x3 * 3x4 = 4x4)
+    float tmp[4][3];
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 3; j++) {
+            float sum = 0.0f;
+            for (int k = 0; k < 3; k++) {
+                sum += G[i][k] * g[k * 3 + j];
+            }
+            tmp[i][j] = sum;
+        }
+    }
+
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+            float sum = 0.0f;
+            for (int k = 0; k < 3; k++) {
+                sum += tmp[i][k] * G[j][k];
+            }
+            U[i * 4 + j] = sum;
+        }
+    }
 }
 
 // ============================================================
@@ -75,9 +93,26 @@ void kernel_transform(const float* g, float* U) {
 //        V: 4x4 output (row-major, stride = 4)
 // ============================================================
 void input_transform(const float* d, int tile_stride, float* V) {
-    // TODO: implement B^T * d * B
-    // Hint: compute tmp = B^T * d (4x4 * 4x4 = 4x4), then V = tmp * B (4x4 * 4x4 = 4x4)
-    // Note: d may not be contiguous (use tile_stride for row stepping)
+    float tmp[4][4];
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+            float sum = 0.0f;
+            for (int k = 0; k < 4; k++) {
+                sum += BT[i][k] * d[k * tile_stride + j];
+            }
+            tmp[i][j] = sum;
+        }
+    }
+
+    for (int i = 0; i < 4; i++) {
+        for (int j = 0; j < 4; j++) {
+            float sum = 0.0f;
+            for (int k = 0; k < 4; k++) {
+                sum += tmp[i][k] * BT[j][k];
+            }
+            V[i * 4 + j] = sum;
+        }
+    }
 }
 
 // ============================================================
@@ -87,9 +122,33 @@ void input_transform(const float* d, int tile_stride, float* V) {
 //        Y: 2x2 output (row-major, stride = out_stride)
 // ============================================================
 void output_transform(const float* M, float* Y, int out_stride) {
-    // TODO: implement A^T * M * A
-    // Hint: compute tmp = A^T * M (2x4 * 4x4 = 2x4), then Y = tmp * A (2x4 * 4x2 = 2x2)
-    // Note: write output using out_stride for row stepping
+    float tmp[2][4];
+    const float A[4][2] = {
+        {1, 0},
+        {1, 1},
+        {1, -1},
+        {0, -1}
+    };
+
+    for (int i = 0; i < 2; i++) {
+        for (int j = 0; j < 4; j++) {
+            float sum = 0.0f;
+            for (int k = 0; k < 4; k++) {
+                sum += AT[i][k] * M[k * 4 + j];
+            }
+            tmp[i][j] = sum;
+        }
+    }
+
+    for (int i = 0; i < 2; i++) {
+        for (int j = 0; j < 2; j++) {
+            float sum = 0.0f;
+            for (int k = 0; k < 4; k++) {
+                sum += tmp[i][k] * A[k][j];
+            }
+            Y[i * out_stride + j] = sum;
+        }
+    }
 }
 
 // ============================================================
@@ -111,22 +170,65 @@ void winograd_conv2d(const float* input,   int C_in,  int H,     int W,
     int num_tile_h = (H_out + 1) / 2;  // ceil(H_out / 2)
     int num_tile_w = (W_out + 1) / 2;  // ceil(W_out / 2)
 
-    // TODO: implement Winograd convolution
-    //
-    // Suggested steps:
-    //
-    // 1. Pre-compute kernel transforms:
-    //    For each (c_out, c_in), compute U[c_out][c_in] = G * kernel * G^T
-    //
-    // 2. For each output channel c_out:
-    //    For each tile (th, tw):
-    //      a. Initialize accumulated M (4x4) to zero
-    //      b. For each input channel c_in:
-    //         - Extract 4x4 input tile at position (th*2, tw*2)
-    //         - Compute V = B^T * tile * B  (input_transform)
-    //         - Element-wise multiply: M += U[c_out][c_in] .* V
-    //      c. Compute 2x2 output = A^T * M * A  (output_transform)
-    //      d. Write 2x2 result to output at position (th*2, tw*2)
+    const int tile_size = 4;
+
+    float* U = new float[C_out * C_in * tile_size * tile_size];
+    float V[16];
+    float M[16];
+
+    for (int co = 0; co < C_out; co++) {
+        for (int ci = 0; ci < C_in; ci++) {
+            const float* g = kernel + co * C_in * 9 + ci * 9;
+            float* u = U + (co * C_in + ci) * 16;
+            kernel_transform(g, u);
+        }
+    }
+
+    std::memset(output, 0, sizeof(float) * C_out * H_out * W_out);
+
+    for (int co = 0; co < C_out; co++) {
+        for (int th = 0; th < num_tile_h; th++) {
+            for (int tw = 0; tw < num_tile_w; tw++) {
+                std::memset(M, 0, sizeof(M));
+                int ih0 = th * 2;
+                int iw0 = tw * 2;
+
+                for (int ci = 0; ci < C_in; ci++) {
+                    float tile[16];
+                    for (int i = 0; i < 4; i++) {
+                        for (int j = 0; j < 4; j++) {
+                            int ih = ih0 + i;
+                            int iw = iw0 + j;
+                            tile[i * 4 + j] = (ih < H && iw < W)
+                                ? input[ci * H * W + ih * W + iw]
+                                : 0.0f;
+                        }
+                    }
+
+                    input_transform(tile, 4, V);
+                    const float* u = U + (co * C_in + ci) * 16;
+                    for (int i = 0; i < 16; i++) {
+                        M[i] += u[i] * V[i];
+                    }
+                }
+
+                float out_tile_buf[4];
+                output_transform(M, out_tile_buf, 2);
+
+                for (int i = 0; i < 2; i++) {
+                    for (int j = 0; j < 2; j++) {
+                        int oh = ih0 + i;
+                        int ow = iw0 + j;
+                        if (oh < H_out && ow < W_out) {
+                            output[co * H_out * W_out + oh * W_out + ow] = out_tile_buf[i * 2 + j];
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    delete[] U;
 }
 
 // ============================================================

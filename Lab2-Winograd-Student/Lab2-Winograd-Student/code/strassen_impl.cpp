@@ -15,6 +15,7 @@
 #include <cmath>
 #include <cassert>
 #include <sys/time.h>
+#include <algorithm>
 
 double get_time() {
     struct timeval tv;
@@ -42,14 +43,22 @@ void free_matrix(float** M, int n) {
 //  TODO: Matrix addition  C = A + B  (n x n)
 // ============================================================
 void matrix_add(float** A, float** B, float** C, int n) {
-    // TODO: implement
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            C[i][j] = A[i][j] + B[i][j];
+        }
+    }
 }
 
 // ============================================================
 //  TODO: Matrix subtraction  C = A - B  (n x n)
 // ============================================================
 void matrix_sub(float** A, float** B, float** C, int n) {
-    // TODO: implement
+    for (int i = 0; i < n; i++) {
+        for (int j = 0; j < n; j++) {
+            C[i][j] = A[i][j] - B[i][j];
+        }
+    }
 }
 
 // ============================================================
@@ -59,15 +68,100 @@ void matrix_sub(float** A, float** B, float** C, int n) {
 //        Base case: when n <= threshold, fall back to naive multiply.
 // ============================================================
 void strassen(float** A, float** B, float** C, int n) {
-    // Base case: use naive multiplication for small matrices
-    // Recommended threshold: n <= 64
+    if (n <= 64) {
+        for (int i = 0; i < n; i++) {
+            for (int j = 0; j < n; j++) {
+                float sum = 0.0f;
+                for (int k = 0; k < n; k++) {
+                    sum += A[i][k] * B[k][j];
+                }
+                C[i][j] = sum;
+            }
+        }
+        return;
+    }
 
-    // TODO: implement
-    // 1. Split A and B into 4 sub-matrices each (A11, A12, A21, A22, ...)
-    // 2. Compute 7 intermediate products S1..S7 using matrix_add/matrix_sub
-    //    and recursive strassen() calls
-    // 3. Combine S1..S7 into C11, C12, C21, C22
-    // 4. Assemble C from its 4 sub-matrices
+    const int m = n / 2;
+
+    auto copy_block = [m](float** src, int row0, int col0) {
+        float** dst = alloc_matrix(m);
+        for (int i = 0; i < m; i++) {
+            for (int j = 0; j < m; j++) {
+                dst[i][j] = src[row0 + i][col0 + j];
+            }
+        }
+        return dst;
+    };
+
+    float** A11 = copy_block(A, 0, 0);
+    float** A12 = copy_block(A, 0, m);
+    float** A21 = copy_block(A, m, 0);
+    float** A22 = copy_block(A, m, m);
+    float** B11 = copy_block(B, 0, 0);
+    float** B12 = copy_block(B, 0, m);
+    float** B21 = copy_block(B, m, 0);
+    float** B22 = copy_block(B, m, m);
+
+    float** T1 = alloc_matrix(m);
+    float** T2 = alloc_matrix(m);
+    float** P1 = alloc_matrix(m);
+    float** P2 = alloc_matrix(m);
+    float** P3 = alloc_matrix(m);
+    float** P4 = alloc_matrix(m);
+    float** P5 = alloc_matrix(m);
+    float** P6 = alloc_matrix(m);
+    float** P7 = alloc_matrix(m);
+
+    matrix_add(A11, A22, T1, m);
+    matrix_add(B11, B22, T2, m);
+    strassen(T1, T2, P1, m);
+
+    matrix_add(A21, A22, T1, m);
+    strassen(T1, B11, P2, m);
+
+    matrix_sub(B12, B22, T2, m);
+    strassen(A11, T2, P3, m);
+
+    matrix_sub(B21, B11, T2, m);
+    strassen(A22, T2, P4, m);
+
+    matrix_add(A11, A12, T1, m);
+    strassen(T1, B22, P5, m);
+
+    matrix_sub(A21, A11, T1, m);
+    matrix_add(B11, B12, T2, m);
+    strassen(T1, T2, P6, m);
+
+    matrix_sub(A12, A22, T1, m);
+    matrix_add(B21, B22, T2, m);
+    strassen(T1, T2, P7, m);
+
+    for (int i = 0; i < m; i++) {
+        for (int j = 0; j < m; j++) {
+            C[i][j] = P1[i][j] + P4[i][j] - P5[i][j] + P7[i][j];
+            C[i][j + m] = P3[i][j] + P5[i][j];
+            C[i + m][j] = P2[i][j] + P4[i][j];
+            C[i + m][j + m] = P1[i][j] - P2[i][j] + P3[i][j] + P6[i][j];
+        }
+    }
+
+    free_matrix(A11, m);
+    free_matrix(A12, m);
+    free_matrix(A21, m);
+    free_matrix(A22, m);
+    free_matrix(B11, m);
+    free_matrix(B12, m);
+    free_matrix(B21, m);
+    free_matrix(B22, m);
+    free_matrix(T1, m);
+    free_matrix(T2, m);
+    free_matrix(P1, m);
+    free_matrix(P2, m);
+    free_matrix(P3, m);
+    free_matrix(P4, m);
+    free_matrix(P5, m);
+    free_matrix(P6, m);
+    free_matrix(P7, m);
 }
 
 // ============================================================
@@ -80,12 +174,36 @@ void strassen_multiply(const float* A, int I, int K,
                        float* C) {
     assert(K == K2);
 
-    // TODO: implement
-    // 1. Find N = next power of 2 >= max(I, K, J)
-    // 2. Create N x N padded matrices for A, B, C (zero-padded)
-    // 3. Call strassen() on the padded matrices
-    // 4. Extract the I x J result into C
-    // 5. Free temporary matrices
+    int N = 1;
+    int mx = std::max(I, std::max(K, J));
+    while (N < mx) N <<= 1;
+
+    float** Ap = alloc_matrix(N);
+    float** Bp = alloc_matrix(N);
+    float** Cp = alloc_matrix(N);
+
+    for (int i = 0; i < I; i++) {
+        for (int k = 0; k < K; k++) {
+            Ap[i][k] = A[i * K + k];
+        }
+    }
+    for (int k = 0; k < K; k++) {
+        for (int j = 0; j < J; j++) {
+            Bp[k][j] = B[k * J + j];
+        }
+    }
+
+    strassen(Ap, Bp, Cp, N);
+
+    for (int i = 0; i < I; i++) {
+        for (int j = 0; j < J; j++) {
+            C[i * J + j] = Cp[i][j];
+        }
+    }
+
+    free_matrix(Ap, N);
+    free_matrix(Bp, N);
+    free_matrix(Cp, N);
 }
 
 // ============================================================

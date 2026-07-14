@@ -1,0 +1,43 @@
+                    Algorithm        I        J         K   avg_time
+                   matmul_ikj      256      256       256   0.001648
+                   matmul_BT       256      256       256   0.001724
+                   matmul_ikj      256      512       256   0.002621
+                   matmul_BT       256      256       512   0.002683
+                   matmul_ikj      256      256       512   0.003225
+                   matmul_ikj      512      256       256   0.003278
+                   matmul_BT       512      256       256   0.003378
+                   matmul_BT       256      512       256    0.00339
+                   matmul_ikj      256      512       512   0.005176
+                   matmul_ikj      512      512       256   0.005239
+                   matmul_BT       512      256       512   0.005274
+                   matmul_BT       256      512       512   0.005321
+                   matmul_ikj      512      256       512   0.006434
+                   matmul_BT       512      512       256   0.006678
+                   matmul_ikj      512      512       512   0.010347
+                   matmul_BT       512      512       512   0.010504
+                   matmul_ijk      256      256       256   0.010791
+                   matmul_ijk      256      256       512   0.021297
+                   matmul_AT       256      256       256   0.021309
+                   matmul_ijk      512      256       256   0.021527
+                   matmul_ijk      256      512       256    0.02175
+                   matmul_AT       256      256       512   0.042446
+                   matmul_AT       512      256       256   0.042518
+                   matmul_ijk      512      256       512   0.042574
+                   matmul_ijk      256      512       512   0.042949
+                   matmul_ijk      512      512       256   0.043399
+                   matmul_AT       256      512       256   0.043442
+                   matmul_AT       512      256       512   0.084879
+                   matmul_AT       256      512       512   0.085531
+                   matmul_ijk      512      512       512   0.086254
+                   matmul_AT       512      512       256   0.086845
+                   matmul_AT       512      512       512   0.171987
+
+From this table, we could tell that four algorithms are applied in this test, namely
+matmul_ijk, matmul_ikj, matmul_AT, and matmul_BT. The meaning of
+matmul_ijk is that we do the For loops by the order of 𝐼𝐼, 𝐽𝐽, 𝐾𝐾. Therefore, the
+meaning of matmul_ikj is the same, which is that we run the For loops following
+the order of 𝐼𝐼, 𝐾𝐾, 𝐽𝐽. In terms of matmul_AT and matmul_BT, we transpose the
+matrix 𝐴𝐴 or 𝐵𝐵 before computation. The avg_time column represents that the
+average computing time for 32 times matrix multiplications. The four algorithms
+all have a similar time complexity 𝑂𝑂(𝑛𝑛3 ), however, the ways they fetch data differ.
+This is the reason why their computing time varies with the same shape of
